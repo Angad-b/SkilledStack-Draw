@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vanish — Draw with Your Hand</title>
+  <style>
+    :root{
+      --bg:#ffffff; --ink:#0b0d12; --muted:#f3f4f6; --line:#e5e7eb; --accent:#2563eb; --accent-2:#1d4ed8; --danger:#ef4444; --ok:#10b981;
+      --shadow:0 6px 24px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+    }
+    html,body{height:100%;}
+    *{box-sizing:border-box}
+    body{ margin:0; background:var(--bg); color:var(--ink); font: 15px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
+    .app{max-width:1280px;margin:0 auto;padding:12px 14px 28px}
+
+    /* Minimal top bar */
+    .topbar{ display:flex; align-items:center; gap:10px; padding:10px 12px; border-bottom:1px solid var(--line); position:sticky; top:0; background:rgba(255,255,255,.8); backdrop-filter:saturate(140%) blur(8px); z-index:5 }
+    .brand{ font-weight:700; letter-spacing:.2px; display:flex; align-items:center; gap:10px }
+    .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(16,185,129,.15)}
+
+    .spacer{flex:1}
+
+    .btn{appearance:none;border:1px solid var(--line); background:#fff; color:var(--ink); padding:8px 12px; border-radius:12px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease, background .12s; box-shadow:0 1px 0 rgba(0,0,0,.03)}
+    .btn:hover{ transform:translateY(-1px); box-shadow:var(--shadow) }
+    .btn:active{ transform:translateY(0) }
+    .btn.primary{ background:var(--accent); color:#fff; border-color:var(--accent-2) }
+    .btn.ghost{ background:#fff; border-color:var(--line) }
+    .btn.bad{ color:#b91c1c; border-color:#fca5a5; background:#fff }
+
+    .switch{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--line); border-radius:12px; background:#fff }
+    .switch input{ transform:scale(1.1) }
+
+    /* Stage takes the screen */
+    .stage{ position:relative; margin:14px auto 8px; width:min(1200px,96vw); height:calc(100vh - 150px); border-radius:16px; overflow:hidden; border:1px solid var(--line); background:#000; box-shadow:var(--shadow); }
+    video{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); background:#000 }
+    video.hidden{ display:none }
+    canvas{ position:absolute; inset:0; width:100%; height:100% }
+    #hudCanvas{ pointer-events:none }
+
+    /* Floating status & actions */
+    .status{ position:absolute; top:12px; left:12px; background:rgba(255,255,255,.85); border:1px solid var(--line); padding:6px 10px; border-radius:999px; font-size:12px }
+    .fab{ position:absolute; top:12px; right:12px; display:flex; gap:8px }
+
+    /* Minimal dropdown panels */
+    .panel{ position:absolute; top:52px; right:12px; width:min(420px,92vw); background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); padding:12px; transform-origin:top right; transform:scale(.98) translateY(-6px); opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease }
+    .panel.open{ opacity:1; transform:scale(1) translateY(0); pointer-events:auto }
+    .panel h4{ margin:6px 0 6px; font-size:13px; font-weight:700; opacity:.8 }
+    .row{ display:flex; align-items:center; gap:10px; margin:8px 0 }
+    .row .grow{ flex:1 }
+    .panel .subtle{ font-size:12px; opacity:.75 }
+
+    input[type="range"]{ width:100%; accent-color:var(--accent) }
+    input[type="color"]{ width:34px; height:28px; border:1px solid var(--line); padding:0; border-radius:8px; background:#fff }
+
+    .palette{ display:flex; flex-wrap:wrap; gap:6px }
+    .sw{ width:26px; height:26px; border-radius:7px; border:1px solid var(--line); cursor:pointer }
+
+    .hint{ text-align:center; font-size:12px; opacity:.7; margin-top:8px }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand"><span class="dot" aria-hidden="true"></span> SkilledStack</div>
+      <div class="spacer"></div>
+      <button id="startBtnTop" class="btn">Start</button>
+      <button id="toolBtn" class="btn">Brush</button>
+      <button id="undoBtn" class="btn ghost">Undo</button>
+      <button id="redoBtn" class="btn ghost">Redo</button>
+      <label class="switch"><input id="videoToggle" type="checkbox" checked/><span>Video</span></label>
+      <button id="saveBtnTop" class="btn">Save</button>
+      <button id="clearBtnTop" class="btn bad">Clear</button>
+      <button id="colorsBtn" class="btn ghost">Color</button>
+      <button id="settingsBtn" class="btn primary">Settings</button>
+    </div>
+
+    <div class="stage" id="stage">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="drawCanvas"></canvas>
+      <canvas id="hudCanvas"></canvas>
+      <canvas id="procCanvas" style="display:none"></canvas>
+
+      <div class="status"><span id="status">init</span></div>
+      <div class="fab">
+        <button id="startBtn" class="btn">Start Camera</button>
+      </div>
+
+      <!-- Color menu -->
+      <div id="colorPanel" class="panel" aria-label="Colors">
+        <h4>Brush color</h4>
+        <div class="row">
+          <input id="color" type="color" value="#ffbe0b" />
+          <div class="palette" id="palette"></div>
+        </div>
+        <h4>Brush size</h4>
+        <div class="row">
+          <input id="size" class="grow" type="range" min="2" max="44" step="1" value="18" />
+          <span id="sizeVal" class="subtle">18</span>
+        </div>
+      </div>
+
+      <!-- Settings menu -->
+      <div id="settingsPanel" class="panel" aria-label="Settings">
+        <h4>Smoothing</h4>
+        <div class="row"><span class="subtle" style="width:80px">Smooth</span><input id="smooth" class="grow" type="range" min="0.10" max="3.00" step="0.05" value="0.80" /><span id="smoothVal" class="subtle">0.80</span></div>
+        <div class="row"><span class="subtle" style="width:80px">Resp</span><input id="beta" class="grow" type="range" min="0.00" max="1.00" step="0.01" value="0.35" /><span id="betaVal" class="subtle">0.35</span></div>
+
+        <h4>Gesture</h4>
+        <div class="row"><span class="subtle" style="width:80px">Threshold</span><input id="sense" class="grow" type="range" min="0.15" max="0.45" step="0.01" value="0.28" /><span id="senseVal" class="subtle">0.28</span></div>
+        <div class="row"><span class="subtle" style="width:80px">Dwell</span><input id="dwell" class="grow" type="range" min="0" max="250" step="10" value="100" /><span id="dwellVal" class="subtle">100</span></div>
+        <div class="row"><label class="switch"><input id="toggleMode" type="checkbox" /><span>Pinch toggle</span></label></div>
+
+        <h4>Brush</h4>
+        <div class="row"><label class="switch"><input id="velToggle" type="checkbox" checked /><span>Velocity size</span></label><span class="spacer"></span><span class="subtle">Min</span><input id="minWidth" type="range" min="1" max="24" step="1" value="4" /><span id="minVal" class="subtle">4</span></div>
+
+        <h4>Performance</h4>
+        <div class="row"><label class="switch"><input id="perfMode" type="checkbox" /><span>Perf mode</span></label><span class="spacer"></span><span class="subtle">Scale</span><input id="procScale" type="range" min="0.40" max="1.00" step="0.05" value="0.60" /><span id="procVal" class="subtle">0.60×</span></div>
+        <div class="row"><label class="switch"><input id="fastModel" type="checkbox" /><span>Fast model</span></label></div>
+        <div class="row"><span class="subtle" style="width:80px">Proc FPS</span><input id="procFPS" class="grow" type="range" min="15" max="60" step="1" value="30" /><span id="procFPSVal" class="subtle">30</span></div>
+      </div>
+    </div>
+
+    <div class="hint">Pinch thumb + index to draw. Open hand to stop. Press <b>Settings</b> for tuning. Save = drawing PNG (toggle "Video" to include camera in export).</div>
+  </div>
+
+  <!-- MediaPipe Hands (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js" onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/@mediapipe/hands/hands.min.js';document.head.appendChild(s);})();"></script>
+
+  <script>
+  (function(){
+    // ====== Elements & Contexts
+    const video = document.getElementById('video');
+    const drawCanvas = document.getElementById('drawCanvas');
+    const hudCanvas = document.getElementById('hudCanvas');
+    const procCanvas = document.getElementById('procCanvas');
+    const dctx = drawCanvas.getContext('2d');
+    const hctx = hudCanvas.getContext('2d');
+    const pctx = procCanvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+
+    // Topbar shortcuts
+    const startBtnTop = document.getElementById('startBtnTop');
+    const saveBtnTop  = document.getElementById('saveBtnTop');
+    const clearBtnTop = document.getElementById('clearBtnTop');
+    const toolBtn     = document.getElementById('toolBtn');
+
+    // Floating action
+    const startBtn = document.getElementById('startBtn');
+
+    // Panels
+    const colorsBtn = document.getElementById('colorsBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const colorPanel = document.getElementById('colorPanel');
+    const settingsPanel = document.getElementById('settingsPanel');
+
+    // Controls
+    const colorEl = document.getElementById('color');
+    const sizeEl = document.getElementById('size');
+    const sizeVal = document.getElementById('sizeVal');
+    const smoothEl = document.getElementById('smooth');
+    const smoothVal = document.getElementById('smoothVal');
+    const betaEl = document.getElementById('beta');
+    const betaVal = document.getElementById('betaVal');
+    const dwellEl = document.getElementById('dwell');
+    const dwellVal = document.getElementById('dwellVal');
+    const senseEl = document.getElementById('sense');
+    const senseVal = document.getElementById('senseVal');
+    const velToggle = document.getElementById('velToggle');
+    const minWidthEl = document.getElementById('minWidth');
+    const minVal = document.getElementById('minVal');
+    const perfModeEl = document.getElementById('perfMode');
+    const procScaleEl = document.getElementById('procScale');
+    const procVal = document.getElementById('procVal');
+    const fastModelEl = document.getElementById('fastModel');
+    const procFPSEl = document.getElementById('procFPS');
+    const procFPSVal = document.getElementById('procFPSVal');
+
+    const brushBtn = document.getElementById('brushBtn'); // legacy id (not present)
+    const eraserBtn = document.getElementById('eraserBtn'); // legacy id (not present)
+
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    const videoToggle = document.getElementById('videoToggle');
+    const saveBtn = document.getElementById('saveBtnTop'); // unify
+    const clearBtn = document.getElementById('clearBtnTop');
+    const palette = document.getElementById('palette');
+
+    // ====== State
+    let w = 1280, h = 720, dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    const state = {
+      color: localStorage.getItem('vanish.color') || '#ffbe0b',
+      size: +(localStorage.getItem('vanish.size') || 18),
+      minCutoff: +(localStorage.getItem('vanish.minCutoff') || 0.80), // One-Euro
+      beta: +(localStorage.getItem('vanish.beta') || 0.35),
+      dwell: +(localStorage.getItem('vanish.dwell') || 100),
+      sense: +(localStorage.getItem('vanish.sense') || 0.28),
+      toggleMode: JSON.parse(localStorage.getItem('vanish.toggleMode') ?? 'false'),
+      videoOn: JSON.parse(localStorage.getItem('vanish.videoOn') ?? 'true'),
+      erasing: false,
+      velSize: JSON.parse(localStorage.getItem('vanish.velSize') ?? 'true'),
+      minWidth: +(localStorage.getItem('vanish.minWidth') || 4),
+      perfMode: JSON.parse(localStorage.getItem('vanish.perfMode') ?? 'false'),
+      procScale: +(localStorage.getItem('vanish.procScale') || 0.60),
+      speedNorm: +(localStorage.getItem('vanish.speedNorm') || 2600),
+      fastModel: JSON.parse(localStorage.getItem('vanish.fastModel') ?? 'false'),
+      targetFPS: +(localStorage.getItem('vanish.targetFPS') || 30)
+    };
+
+    // Drawing model (for undo/redo)
+    let strokes = [];         // committed
+    let redoStack = [];       // undone
+    let currentStroke = null; // being drawn
+
+    // Filters
+    let fx = null, fy = null; // One-Euro filters per axis
+
+    // Pointer & timing
+    let pinchState = false;   // debounced pinch true/false
+    let drawActive = false;   // are we currently drawing (may be toggle-driven)
+    let dwellTimer = null;    // pinch dwell timer
+    let lastPinchBelow = false;
+
+    // FPS control
+    let lastProcessed = 0;    // timestamp of last processed frame
+    let procCount = 0, lastFPSClock = performance.now(), fpsEst = 0;
+
+    // ====== UI init
+    colorEl.value = state.color; sizeEl.value = state.size; sizeVal.textContent = state.size;
+    smoothEl.value = state.minCutoff.toFixed(2); smoothVal.textContent = state.minCutoff.toFixed(2);
+    betaEl.value = state.beta.toFixed(2); betaVal.textContent = state.beta.toFixed(2);
+    dwellEl.value = state.dwell; dwellVal.textContent = state.dwell;
+    senseEl.value = state.sense.toFixed(2); senseVal.textContent = state.sense.toFixed(2);
+    videoToggle.checked = state.videoOn;
+    velToggle.checked = state.velSize; minWidthEl.value = state.minWidth; minVal.textContent = state.minWidth;
+    perfModeEl.checked = state.perfMode; procScaleEl.value = state.procScale; procVal.textContent = `${state.procScale.toFixed(2)}×`;
+    fastModelEl.checked = state.fastModel; procFPSEl.value = state.targetFPS; procFPSVal.textContent = state.targetFPS;
+
+    toolBtn.textContent = state.erasing ? 'Eraser' : 'Brush';
+
+    const quickColors = ['#111827','#ffffff','#ffbe0b','#fb5607','#ff006e','#8338ec','#3a86ff','#06d6a0','#f94144'];
+    quickColors.forEach(c=>{ const s=document.createElement('button'); s.className='sw'; s.style.background=c; s.title=c; s.addEventListener('click',()=>{ colorEl.value=c; state.color=c; persist('color',c); setBrush(); }); palette.appendChild(s); });
+
+    function persist(k,v){ localStorage.setItem('vanish.'+k, typeof v==='string'? v : JSON.stringify(v)); }
+
+    function setBrush(){
+      // erasing controlled by toolBtn text
+      if (state.erasing){ dctx.globalCompositeOperation = 'destination-out'; dctx.strokeStyle = 'rgba(0,0,0,1)'; }
+      else { dctx.globalCompositeOperation = 'source-over'; dctx.strokeStyle = state.color; }
+    }
+
+    function toggleTool(){ state.erasing = !state.erasing; toolBtn.textContent = state.erasing ? 'Eraser' : 'Brush'; setBrush(); }
+
+    toolBtn.addEventListener('click', toggleTool);
+    startBtnTop.addEventListener('click', ()=>{ startCamera(); hidePanels(); });
+    saveBtnTop.addEventListener('click', ()=> doSave());
+    clearBtnTop.addEventListener('click', ()=>{ if(confirm('Clear drawing?')){ strokes=[]; redoStack=[]; currentStroke=null; redrawAll(); } });
+    startBtn.addEventListener('click', ()=>{ startCamera(); startBtn.style.display='none'; });
+
+    document.addEventListener('click', (e)=>{
+      // close panels when clicking outside
+      if (!colorPanel.contains(e.target) && e.target!==colorsBtn) colorPanel.classList.remove('open');
+      if (!settingsPanel.contains(e.target) && e.target!==settingsBtn) settingsPanel.classList.remove('open');
+    });
+    colorsBtn.addEventListener('click', ()=>{ colorPanel.classList.toggle('open'); settingsPanel.classList.remove('open'); });
+    settingsBtn.addEventListener('click', ()=>{ settingsPanel.classList.toggle('open'); colorPanel.classList.remove('open'); });
+    function hidePanels(){ colorPanel.classList.remove('open'); settingsPanel.classList.remove('open'); }
+
+    sizeEl.addEventListener('input', ()=>{ state.size = +sizeEl.value; sizeVal.textContent = state.size; persist('size', state.size); });
+    colorEl.addEventListener('input', ()=>{ state.color = colorEl.value; persist('color', state.color); setBrush(); });
+    smoothEl.addEventListener('input', ()=>{ state.minCutoff = +(+smoothEl.value).toFixed(2); smoothVal.textContent = state.minCutoff.toFixed(2); persist('minCutoff', state.minCutoff); resetFilters(); });
+    betaEl.addEventListener('input', ()=>{ state.beta = +(+betaEl.value).toFixed(2); betaVal.textContent = state.beta.toFixed(2); persist('beta', state.beta); resetFilters(); });
+    dwellEl.addEventListener('input', ()=>{ state.dwell = +dwellEl.value; dwellVal.textContent = state.dwell; persist('dwell', state.dwell); });
+    senseEl.addEventListener('input', ()=>{ state.sense = +(+senseEl.value).toFixed(2); senseVal.textContent = state.sense.toFixed(2); persist('sense', state.sense); });
+    velToggle.addEventListener('change', ()=>{ state.velSize = velToggle.checked; persist('velSize', state.velSize); });
+    minWidthEl.addEventListener('input', ()=>{ state.minWidth = +minWidthEl.value; minVal.textContent = state.minWidth; persist('minWidth', state.minWidth); });
+    perfModeEl.addEventListener('change', ()=>{ state.perfMode = perfModeEl.checked; persist('perfMode', state.perfMode); sizeProcCanvas(); });
+    procScaleEl.addEventListener('input', ()=>{ state.procScale = +(+procScaleEl.value).toFixed(2); procVal.textContent = `${state.procScale.toFixed(2)}×`; persist('procScale', state.procScale); sizeProcCanvas(); });
+    fastModelEl.addEventListener('change', ()=>{ state.fastModel = fastModelEl.checked; persist('fastModel', state.fastModel); hands && hands.setOptions({ modelComplexity: state.fastModel ? 0 : 1 }); });
+    procFPSEl.addEventListener('input', ()=>{ state.targetFPS = +procFPSEl.value; procFPSVal.textContent = state.targetFPS; persist('targetFPS', state.targetFPS); });
+
+    undoBtn.addEventListener('click', undo); redoBtn.addEventListener('click', redo);
+    videoToggle.addEventListener('change', ()=>{ state.videoOn = videoToggle.checked; persist('videoOn', state.videoOn); video.classList.toggle('hidden', !state.videoOn); });
+
+    function doSave(){
+      // Export drawing-only (transparent) by default; hold Option to include video
+      const includeVideo = false;
+      const out = document.createElement('canvas'); out.width = drawCanvas.width; out.height = drawCanvas.height; const o = out.getContext('2d');
+      if (includeVideo){ o.save(); o.translate(out.width, 0); o.scale(-1, 1); o.drawImage(video, 0, 0, out.width, out.height); o.restore(); }
+      o.drawImage(drawCanvas, 0, 0);
+      const url = out.toDataURL('image/png'); const a = document.createElement('a'); a.href = url; a.download = includeVideo? 'vanish_composited.png' : 'vanish.png'; a.click();
+    }
+
+    // ====== Layout & DPI
+    function sizeCanvases(){
+      w = video.videoWidth || 1280; h = video.videoHeight || 720; dpr = Math.min(window.devicePixelRatio||1, 2);
+      [drawCanvas, hudCanvas].forEach(cv=>{ cv.width = w * dpr; cv.height = h * dpr; cv.style.width = '100%'; cv.style.height = '100%'; });
+      dctx.setTransform(dpr,0,0,dpr,0,0); hctx.setTransform(dpr,0,0,dpr,0,0); setBrush();
+      resetFilters(); sizeProcCanvas();
+    }
+    function sizeProcCanvas(){
+      const scale = state.perfMode ? state.procScale : 1.0;
+      procCanvas.width = Math.max(2, Math.floor((video.videoWidth||1280) * scale));
+      procCanvas.height= Math.max(2, Math.floor((video.videoHeight||720) * scale));
+    }
+    window.addEventListener('resize', ()=> setTimeout(sizeCanvases, 50));
+
+    // ====== One-Euro filter implementation
+    class LowPass{ constructor(alpha){ this.a = alpha; this.y=undefined; this.s=undefined; this.init=false; } filter(x, a){ if(a!==undefined) this.a=a; if(!this.init){ this.init=true; this.y=x; this.s=x; return x;} this.s=this.a*x+(1-this.a)*this.s; this.y=this.s; return this.y; } }
+    function alpha(dt, cutoff){ const tau = 1.0/(2*Math.PI*cutoff); return 1.0 / (1.0 + tau/dt); }
+    class OneEuro{ constructor(minCutoff=0.8,beta=0.35,dCutoff=1.0){ this.minCutoff=minCutoff; this.beta=beta; this.dCutoff=dCutoff; this.xf=new LowPass(1); this.dxf=new LowPass(1); this.lastTime=null; } filter(x,t){ if(this.lastTime==null){ this.lastTime=t; this.xf=new LowPass(1); this.dxf=new LowPass(1); return x;} const dt=Math.max((t-this.lastTime)/1000,1/1200); this.lastTime=t; const dx=this.xf.init? (x-this.xf.y)/dt : 0; const edx=this.dxf.filter(dx, alpha(dt,this.dCutoff)); const cutoff=this.minCutoff + this.beta*Math.abs(edx); return this.xf.filter(x, alpha(dt, cutoff)); } set(minCutoff,beta){ this.minCutoff=minCutoff; this.beta=beta; } reset(){ this.lastTime=null; this.xf=new LowPass(1); this.dxf=new LowPass(1);} }
+
+    function resetFilters(){ fx = new OneEuro(state.minCutoff, state.beta, 1.0); fy = new OneEuro(state.minCutoff, state.beta, 1.0); }
+
+    // ====== Stroke helpers (variable width)
+    function startStroke(){ currentStroke = { points: [], color: state.color, size: state.size, minWidth: state.minWidth, eraser: state.erasing, velSize: state.velSize }; redoStack = []; }
+
+    function computeWidth(prev, x,y, dt){
+      if (!state.velSize || !prev || !dt) return state.size;
+      const dist = Math.hypot(x - prev.x, y - prev.y); const speed = dist / Math.max(dt, 1/1200); // px/s
+      const s = Math.min(speed / state.speedNorm, 1); // 0 slow -> 1 fast
+      const w = (1 - s) * state.size + s * state.minWidth; // slow=max, fast=min
+      return Math.max(1, w);
+    }
+
+    function addPoint(x,y,t){ if(!currentStroke) startStroke(); const prev = currentStroke.points[currentStroke.points.length-1]; const dt = prev ? Math.max((t - prev.t)/1000, 1/1200) : null; const wSeg = computeWidth(prev, x,y, dt); const pt = {x,y,w:wSeg,t}; currentStroke.points.push(pt); drawLastSegment(currentStroke); }
+    function endStroke(){ if (currentStroke && currentStroke.points.length>1){ strokes.push(currentStroke); } currentStroke = null; }
+
+    function drawLastSegment(stroke){ const pts = stroke.points; if (pts.length < 2) return; const a = pts[pts.length-2], b = pts[pts.length-1]; const gap = Math.hypot(b.x-a.x, b.y-a.y); if (gap > Math.min(w,h)*0.25) return; dctx.save(); dctx.lineJoin='round'; dctx.lineCap='round'; dctx.lineWidth = (b.w || stroke.size) * dpr; if (stroke.eraser){ dctx.globalCompositeOperation = 'destination-out'; dctx.strokeStyle = 'rgba(0,0,0,1)'; } else { dctx.globalCompositeOperation = 'source-over'; dctx.strokeStyle = stroke.color; } dctx.beginPath(); dctx.moveTo(a.x, a.y); dctx.lineTo(b.x, b.y); dctx.stroke(); dctx.restore(); }
+    function drawStrokeFull(stroke){ if (!stroke || stroke.points.length<2) return; dctx.save(); dctx.lineJoin='round'; dctx.lineCap='round'; if (stroke.eraser){ dctx.globalCompositeOperation='destination-out'; dctx.strokeStyle='rgba(0,0,0,1)'; } else { dctx.globalCompositeOperation='source-over'; dctx.strokeStyle=stroke.color; } const pts = stroke.points; for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; dctx.lineWidth = (b.w || stroke.size) * dpr; dctx.beginPath(); dctx.moveTo(a.x,a.y); dctx.lineTo(b.x,b.y); dctx.stroke(); } dctx.restore(); }
+    function redrawAll(){ dctx.clearRect(0,0, drawCanvas.width, drawCanvas.height); for (const s of strokes){ drawStrokeFull(s); } }
+
+    function undo(){ if (currentStroke){ currentStroke=null; return; } if (strokes.length){ redoStack.push(strokes.pop()); redrawAll(); } }
+    function redo(){ if (redoStack.length){ strokes.push(redoStack.pop()); redrawAll(); } }
+
+    // ====== Hand tracking (MediaPipe Hands)
+    let HandsCtor = window.Hands; if (!HandsCtor){ statusEl.textContent = 'lib load failed'; alert('Hand-tracking lib failed to load. Check connection and allow CDN.'); return; }
+    const hands = new HandsCtor({ locateFile: (f)=> `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 1, modelComplexity: state.fastModel ? 0 : 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    hands.onResults(onResults);
+
+    // Use native getUserMedia + rVFC; gate by target FPS
+    async function startCamera(){
+      setStatus('requesting camera…');
+      try{
+        const mustBeSecure = !(location.hostname==='localhost' || location.hostname==='127.0.0.1');
+        if (location.protocol !== 'https:' && mustBeSecure){ setStatus('needs https'); alert('Browsers block cameras on non-HTTPS origins. Please use https or localhost.'); return; }
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60} }, audio:false });
+        video.srcObject = stream; await new Promise(res=> video.onloadedmetadata = res); await video.play().catch(()=>{});
+        setStatus('camera on'); sizeCanvases(); beginLoop();
+      }catch(err){ setStatus('camera blocked'); console.error(err); alert('Could not access camera. Check site permission (Allow), then reload. ' + err); }
+    }
+
+    function beginLoop(){
+      if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){
+        const tick = (now)=>{
+          const targetMs = 1000 / Math.max(15, Math.min(60, state.targetFPS));
+          if (!lastProcessed || (now - lastProcessed) >= targetMs){ lastProcessed = now; sendToHands(); }
+          video.requestVideoFrameCallback(tick);
+        };
+        video.requestVideoFrameCallback(tick);
+      } else {
+        (function loop(){ requestAnimationFrame(loop); const now = performance.now(); const targetMs = 1000 / Math.max(15, Math.min(60, state.targetFPS)); if (!lastProcessed || (now - lastProcessed) >= targetMs){ lastProcessed = now; sendToHands(); } })();
+      }
+    }
+
+    function sendToHands(){
+      if (state.perfMode){
+        const s = state.procScale || 1; const pw = Math.max(2, Math.floor(video.videoWidth * s)); const ph = Math.max(2, Math.floor(video.videoHeight * s)); if (procCanvas.width !== pw || procCanvas.height !== ph){ procCanvas.width = pw; procCanvas.height = ph; }
+        pctx.drawImage(video, 0, 0, pw, ph);
+        hands.send({ image: procCanvas }).then(()=> afterProcess());
+      } else {
+        hands.send({ image: video }).then(()=> afterProcess());
+      }
+    }
+
+    function afterProcess(){
+      procCount++; const now = performance.now(); if (now - lastFPSClock > 800){ fpsEst = Math.round((procCount*1000)/(now - lastFPSClock)); procCount=0; lastFPSClock = now; }
+    }
+
+    let noHandFrames = 0;
+    function onResults(results){
+      const t = performance.now();
+      const landmarks = results.multiHandLandmarks && results.multiHandLandmarks[0];
+      hctx.clearRect(0,0, hudCanvas.width, hudCanvas.height);
+
+      if (!landmarks){ noHandFrames++; if (noHandFrames > 3){ handlePinch(false, t); if (fx) { fx.reset(); fy.reset(); } } drawCursor(null, 0, drawActive); setStatus(`no hand | ${fpsEst}fps`); return; }
+      setStatus(`${drawActive?'DRAW':'tracking'} | ${fpsEst}fps`);
+      noHandFrames = 0;
+
+      const idxTip = landmarks[8]; const thTip  = landmarks[4]; const idxMCP = landmarks[5]; const pkyMCP = landmarks[17];
+
+      // Mirror X to match the mirrored video
+      const px = (1 - idxTip.x) * w; const py = idxTip.y * h;
+      if (!fx || !fy) resetFilters();
+      const sx = fx.filter(px, t); const sy = fy.filter(py, t);
+
+      // Pinch detection (scale-invariant)
+      const pinchRaw = Math.hypot((1-thTip.x)-(1-idxTip.x), thTip.y-idxTip.y);
+      const handWidth = Math.hypot((1-idxMCP.x)-(1-pkyMCP.x), idxMCP.y-pkyMCP.y);
+      const pinchNorm = pinchRaw / Math.max(handWidth, 1e-4);
+
+      // Hysteresis
+      const T_on  = state.sense; const T_off = Math.min(state.sense + 0.08, 0.6);
+      const below = pinchNorm < (pinchState ? T_off : T_on);
+      handlePinch(below, t);
+
+      // Drawing
+      if (drawActive){ if (!currentStroke) startStroke(); addPoint(sx, sy, t); } else { if (currentStroke) endStroke(); }
+
+      drawCursor({x:sx, y:sy}, pinchNorm, drawActive);
+    }
+
+    function handlePinch(isBelow, t){ if (isBelow === lastPinchBelow) return; lastPinchBelow = isBelow; if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = null; } dwellTimer = setTimeout(()=>{ pinchState = isBelow; if (state.toggleMode){ if (pinchState) drawActive = !drawActive; } else { drawActive = pinchState; } }, state.dwell); }
+
+    function drawCursor(pt, pinchNorm, active){ hctx.clearRect(0,0, hudCanvas.width, hudCanvas.height); if (!pt) return; const r = Math.max(4, state.size*0.6) * dpr; hctx.save(); hctx.lineWidth = 2 * dpr; hctx.strokeStyle = active ? 'rgba(37,99,235,.95)' : 'rgba(0,0,0,.45)'; hctx.fillStyle = active ? 'rgba(37,99,235,.20)' : 'rgba(0,0,0,.12)'; hctx.beginPath(); hctx.arc(pt.x, pt.y, r, 0, Math.PI*2); hctx.fill(); hctx.stroke(); hctx.fillStyle = 'rgba(0,0,0,.65)'; hctx.font = `${12*dpr}px Inter, system-ui`; hctx.fillText(`pinch=${(pinchNorm||0).toFixed(2)} thr=${state.sense.toFixed(2)}`, 12*dpr, 20*dpr); hctx.restore(); }
+
+    function setStatus(main){ statusEl.textContent = main; }
+
+    // Keyboard basics
+    window.addEventListener('keydown', (e)=>{
+      if (['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      switch(true){
+        case e.key==='b' || e.key==='B': toggleTool(); break;
+        case e.key==='c' || e.key==='C': if(confirm('Clear drawing?')){ strokes=[]; redoStack=[]; currentStroke=null; redrawAll(); } break;
+        case e.key==='h' || e.key==='H': videoToggle.checked = !videoToggle.checked; videoToggle.dispatchEvent(new Event('change')); break;
+        case mod && e.key.toLowerCase()==='z' && !e.shiftKey: e.preventDefault(); undo(); break;
+        case (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey))): e.preventDefault(); redo(); break;
+      }
+    });
+
+    // Init
+    setBrush();
+    startCamera().then(()=> startBtn.style.display='none').catch(()=>{});
+  })();
+  </script>
+</body>
+</html>
